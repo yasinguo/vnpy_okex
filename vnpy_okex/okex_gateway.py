@@ -98,6 +98,7 @@ INTERVAL_VT2OKEX: Dict[Interval, str] = {
 PRODUCT_OKEX2VT: Dict[str, Product] = {
     "SWAP": Product.FUTURES,
     "SPOT": Product.SPOT,
+    "MARGIN": Product.MARGIN,
     "FUTURES": Product.FUTURES,
     "OPTION": Product.OPTION
 }
@@ -340,14 +341,14 @@ class OkexRestApi(RestClient):
     def query_history(self, req: HistoryRequest) -> List[BarData]:
         """
         查询历史数据
-
-        K线数据每个粒度最多可获取最近1440条
         """
         buf: Dict[datetime, BarData] = {}
+        begin_time = req.start.replace(tzinfo=None)
         end_time: str = ""
-        path: str = "/api/v5/market/candles"
+        end_time_tmp = datetime.now()
+        path: str = "/api/v5/market/history-candles"
 
-        for i in range(15):
+        while end_time_tmp.__ge__(begin_time):
             # 创建查询参数
             params: dict = {
                 "instId": req.symbol,
@@ -378,7 +379,7 @@ class OkexRestApi(RestClient):
                     break
 
                 for bar_list in data["data"]:
-                    ts, o, h, l, c, vol, _ = bar_list
+                    ts, o, h, l, c, vol, _, _, _ = bar_list
                     dt = parse_timestamp(ts)
                     bar: BarData = BarData(
                         symbol=req.symbol,
@@ -401,13 +402,13 @@ class OkexRestApi(RestClient):
 
                 # 更新结束时间
                 end_time = begin
+                end_time_tmp = parse_timestamp(begin).replace(tzinfo=None)
 
         index: List[datetime] = list(buf.keys())
         index.sort()
 
         history: List[BarData] = [buf[i] for i in index]
         return history
-
 
 class OkexWebsocketPublicApi(WebsocketClient):
     """"""
@@ -446,7 +447,7 @@ class OkexWebsocketPublicApi(WebsocketClient):
         """查询合约信息"""
         # 生成现货、永续、期货、期权的查询请求
         args: list = []
-        for inst_type in ["SPOT", "SWAP", "FUTURES", "OPTION"]:
+        for inst_type in ["SPOT", "MARGIN", "SWAP", "FUTURES", "OPTION"]:
             args.append({
                 "channel": "instruments",
                 "instType": inst_type
@@ -535,7 +536,7 @@ class OkexWebsocketPublicApi(WebsocketClient):
             symbol: str = d["instId"]
             product: Product = PRODUCT_OKEX2VT[d["instType"]]
             net_position: bool = True
-            if product == Product.SPOT:
+            if product == Product.SPOT or product == Product.MARGIN:
                 size: float = 1
             else:
                 size: float = float(d["ctMult"])
@@ -742,7 +743,7 @@ class OkexWebsocketPrivateApi(WebsocketClient):
                 balance=float(detail["eq"]),
                 gateway_name=self.gateway_name,
             )
-            account.available = float(detail["availEq"])
+            account.available = float(detail["availEq"]) if len(detail["availEq"]) != 0 else 0.0
             account.frozen = account.balance - account.available
             self.gateway.on_account(account)
 
